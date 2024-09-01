@@ -3,13 +3,11 @@ import prettytable as prettytable
 import random as rnd
 from datetime import datetime, timedelta
 
-
 POPULATION_SIZE = 9
 NUMB_OF_ELITE_SCHEDULES = 1
 TOURNAMENT_SELECTION_SIZE = 1
 MUTATION_RATE = 0.1
-
-# University Time Constants
+GENERATIONS = 1000
 UNIVERSITY_START_TIME = datetime.strptime("08:30", "%H:%M")
 UNIVERSITY_END_TIME = datetime.strptime("16:45", "%H:%M")
 LUNCH_BREAK_START = datetime.strptime("12:45", "%H:%M")
@@ -26,8 +24,8 @@ class Room:
     def get_number(self):
         return self._number
 
-# professor Class
-class professor:
+# Professor Class
+class Professor:
     def __init__(self, id, name):
         self._id = id
         self._name = name
@@ -96,11 +94,15 @@ class MeetingTime:
 
 # Panel Class
 class Panel:
-    def __init__(self, name):
+    def __init__(self, name, num_batches):
         self._name = name
+        self._num_batches = num_batches
 
     def get_name(self):
         return self._name
+
+    def get_num_batches(self):
+        return self._num_batches
 
 # Data Class (Storage)
 class Data:
@@ -159,24 +161,26 @@ class Data:
         class_time_id = 1
         for day in DAYS_OF_WEEK:
             current_time = UNIVERSITY_START_TIME
-            while current_time < UNIVERSITY_END_TIME:
-                if current_time < LUNCH_BREAK_START or current_time >= LUNCH_BREAK_END:
+            while current_time + LAB_TIME_SLOT_DURATION <= UNIVERSITY_END_TIME:
+                if not (LUNCH_BREAK_START <= current_time < LUNCH_BREAK_END):
+                    # Add lecture time slots
                     class_time = MeetingTime(f'MT{class_time_id}', day, current_time.strftime("%H:%M"), TIME_SLOT_DURATION)
                     self.add_class_time(class_time)
                     class_time_id += 1
+                    # Add lab time slots
                     if current_time + LAB_TIME_SLOT_DURATION <= UNIVERSITY_END_TIME:
-                        class_time = MeetingTime(f'MT{class_time_id}', day, current_time.strftime("%H:%M"), LAB_TIME_SLOT_DURATION)
-                        self.add_class_time(class_time)
+                        lab_time = MeetingTime(f'MT{class_time_id}', day, current_time.strftime("%H:%M"), LAB_TIME_SLOT_DURATION)
+                        self.add_class_time(lab_time)
                         class_time_id += 1
                 current_time += TIME_SLOT_DURATION
-
 
 class Schedule:
     def __init__(self, data, panel):
         self._data = data
         self._panel = panel
         self._classes = []
-        self._fitness = 0
+        self._fitness = -1
+        self._class_numb = 0
         self._is_fitness_changed = True
 
     def get_classes(self):
@@ -187,58 +191,52 @@ class Schedule:
         self._classes = []
         for dept in self._data.get_depts():
             for course in dept.get_courses():
-                
-                class_times = [mt for mt in self._data.get_class_times() if mt.get_duration() == TIME_SLOT_DURATION]
-                rnd.shuffle(class_times)
-                
-                for i in range(course.get_lectures_per_week()):
-                    if i < len(class_times) - 1:  # Ensure we have enough consecutive slots
-                        class_time = class_times[i]
-                        next_class_time = class_times[i + 1]
+                # Schedule Lectures
+                for _ in range(course.get_lectures_per_week()):
+                    lecture_class_times = [mt for mt in self._data.get_class_times() if mt.get_duration() == TIME_SLOT_DURATION]
+                    rnd.shuffle(lecture_class_times)
+                    lecture_class_time = lecture_class_times[0]
 
-                       
-                        if class_time.get_day() == next_class_time.get_day() and \
-                                (datetime.strptime(next_class_time.get_time(), "%H:%M") - datetime.strptime(class_time.get_time(), "%H:%M")) == TIME_SLOT_DURATION:
-                            room = rnd.choice(self._data.get_rooms())
-                            professor = rnd.choice(course.get_professors()) if course.get_professors() else None
-                            if professor:
-                                self._classes.append({
-                                    "panel": self._panel.get_name(),
-                                    "department": dept.get_name(),
-                                    "course": course.get_name(),
-                                    "room": room.get_number(),
-                                    "professor": professor.get_name(),
-                                    "class_time": f"{class_time.get_day()} {class_time.get_time()} ({class_time.get_duration()})"
-                                })
-                        else:
-                            class_time = rnd.choice(class_times)
-                            room = rnd.choice(self._data.get_rooms())
-                            professor = rnd.choice(course.get_professors()) if course.get_professors() else None
-                            if professor:
-                                self._classes.append({
-                                    "panel": self._panel.get_name(),
-                                    "department": dept.get_name(),
-                                    "course": course.get_name(),
-                                    "room": room.get_number(),
-                                    "professor": professor.get_name(),
-                                    "class_time": f"{class_time.get_day()} {class_time.get_time()} ({class_time.get_duration()})"
-                                })
+                    available_rooms = self._data.get_rooms().copy()
+                    rnd.shuffle(available_rooms)
+                    room = available_rooms.pop()
 
-                for _ in range(course.get_labs_per_week()):
-                    lab_class_times = [mt for mt in self._data.get_class_times() if mt.get_duration() == LAB_TIME_SLOT_DURATION]
-                    rnd.shuffle(lab_class_times)
-                    lab_class_time = lab_class_times[0]
-                    lab_room = rnd.choice(self._data.get_lab_rooms())
                     professor = rnd.choice(course.get_professors()) if course.get_professors() else None
                     if professor:
                         self._classes.append({
                             "panel": self._panel.get_name(),
+                            "batch": "All",
                             "department": dept.get_name(),
-                            "course": f"{course.get_name()} (Lab)",
-                            "room": lab_room.get_number(),
+                            "course": course.get_name(),
+                            "room": room.get_number(),
                             "professor": professor.get_name(),
-                            "class_time": f"{lab_class_time.get_day()} {lab_class_time.get_time()} ({lab_class_time.get_duration()})"
+                            "class_time": f"{lecture_class_time.get_day()} {lecture_class_time.get_time()} ({lecture_class_time.get_duration()})"
                         })
+
+                # Schedule Labs
+                for _ in range(course.get_labs_per_week()):
+                    lab_class_times = [mt for mt in self._data.get_class_times() if mt.get_duration() == LAB_TIME_SLOT_DURATION]
+                    rnd.shuffle(lab_class_times)
+                    lab_class_time = lab_class_times[0]
+
+                    available_lab_rooms = self._data.get_lab_rooms().copy()
+                    if len(available_lab_rooms) < self._panel.get_num_batches():
+                        raise ValueError(f"Not enough lab rooms to schedule labs for all batches in panel {self._panel.get_name()}.")
+
+                    rnd.shuffle(available_lab_rooms)
+                    for batch_num in range(1, self._panel.get_num_batches() + 1):
+                        lab_room = available_lab_rooms.pop()
+                        professor = rnd.choice(course.get_professors()) if course.get_professors() else None
+                        if professor:
+                            self._classes.append({
+                                "panel": self._panel.get_name(),
+                                "batch": f"Batch {batch_num}",
+                                "department": dept.get_name(),
+                                "course": f"{course.get_name()} (Lab)",
+                                "room": lab_room.get_number(),
+                                "professor": professor.get_name(),
+                                "class_time": f"{lab_class_time.get_day()} {lab_class_time.get_time()} ({lab_class_time.get_duration()})"
+                            })
         return self
 
     def get_fitness(self):
@@ -248,125 +246,91 @@ class Schedule:
         return self._fitness
 
     def calculate_fitness(self):
-        room_time_slots = set()
-        professor_time_slots = set()
+        conflicts = 0
+        classes = self.get_classes()
+        for i in range(len(classes)):
+            for j in range(i + 1, len(classes)):
+                classA = classes[i]
+                classB = classes[j]
+                # Check if classes are at the same time
+                if classA["class_time"] == classB["class_time"]:
+                    # Check for room conflict
+                    if classA["room"] == classB["room"]:
+                        conflicts += 1
+                    # Check for professor conflict
+                    if classA["professor"] == classB["professor"]:
+                        conflicts += 1
+                    # Check for batch conflict
+                    if classA["batch"] == classB["batch"] and classA["batch"] != "All":
+                        conflicts += 1
+        return 1 / (1 + conflicts)  # Fitness is higher when conflicts are lower
 
-        for cls in self._classes:
-            room_time_slot = (cls["room"], cls["class_time"])
-            professor_time_slot = (cls["professor"], cls["class_time"])
-
-            if room_time_slot in room_time_slots or professor_time_slot in professor_time_slots:
-                return 0.0  # Penalize for conflicts
-
-            room_time_slots.add(room_time_slot)
-            professor_time_slots.add(professor_time_slot)
-
-  
-        return len(self._classes) / (len(self._data.get_rooms()) * len(DAYS_OF_WEEK))
-
-# Population Class (Genetic Algorithm)
 class Population:
     def __init__(self, size, data):
-        
-        self._schedules = [Schedule(data, panel).initialize() for panel in data.get_panels()]
+        self._schedules = []
+        for _ in range(size):
+            for panel in data.get_panels():
+                self._schedules.append(Schedule(data, panel).initialize())
 
     def get_schedules(self):
         return self._schedules
-    
-# Genetic Algorithm
+
 class GeneticAlgorithm:
-    @staticmethod
-    def evolve(population):
-        schedules = population.get_schedules()
-        if not schedules:
-            raise ValueError("Population is empty. Cannot evolve an empty population.")
-        return GeneticAlgorithm._mutate_population(GeneticAlgorithm._crossover_population(population))
+    def evolve(self, population):
+        return self._mutate_population(self._crossover_population(population))
 
-    @staticmethod
-    def _crossover_population(population):
-        schedules = population.get_schedules()
-        if len(schedules) < 2:
-            raise ValueError("Not enough schedules for crossover. Ensure population is large enough.")
-
-        crossover_pop = Population(0, schedules[0]._data)
+    def _crossover_population(self, pop):
+        crossover_pop = Population(0, pop.get_schedules()[0]._data)
         for i in range(NUMB_OF_ELITE_SCHEDULES):
-            crossover_pop.get_schedules().append(schedules[i])
-        for i in range(NUMB_OF_ELITE_SCHEDULES, POPULATION_SIZE):
-            schedule1 = GeneticAlgorithm._select_tournament_population(population).get_schedules()[0]
-            schedule2 = GeneticAlgorithm._select_tournament_population(population).get_schedules()[0]
-            new_schedule = GeneticAlgorithm._crossover_schedule(schedule1, schedule2)
-            crossover_pop.get_schedules().append(new_schedule)
+            crossover_pop.get_schedules().append(pop.get_schedules()[i])
+        i = NUMB_OF_ELITE_SCHEDULES
+        while i < POPULATION_SIZE:
+            schedule1 = self._select_tournament_population(pop).get_schedules()[0]
+            schedule2 = self._select_tournament_population(pop).get_schedules()[0]
+            crossover_pop.get_schedules().append(self._crossover_schedule(schedule1, schedule2))
+            i += 1
         return crossover_pop
 
-    @staticmethod
-    def _crossover_schedule(schedule1, schedule2):
-        new_schedule = Schedule(schedule1._data, schedule1._panel)
-        new_classes = []
-
-        classes1 = schedule1.get_classes()
-        classes2 = schedule2.get_classes()
-
-        all_classes = classes1 + classes2
-        rnd.shuffle(all_classes)
-
-        num_classes = min(len(classes1), len(classes2))
-        new_classes = all_classes[:num_classes]
-
-        new_schedule._classes = new_classes
-        return new_schedule
-
-    @staticmethod
-    def _mutate_population(population):
-        schedules = population.get_schedules()
-        if not schedules:
-            raise ValueError("Cannot perform mutation on an empty population.")
+    def _mutate_population(self, population):
         for i in range(NUMB_OF_ELITE_SCHEDULES, POPULATION_SIZE):
-            GeneticAlgorithm._mutate_schedule(schedules[i])
+            self._mutate_schedule(population.get_schedules()[i])
         return population
 
-    @staticmethod
-    def _mutate_schedule(schedule):
-        classes = schedule.get_classes()
-        if not classes:
-            return
-        
-        # Choose a random class to mutate
-        class_to_mutate = rnd.choice(classes)
-        new_class = class_to_mutate.copy()
-        
-        # Example mutation: random change in room or professor
-        new_class['room'] = rnd.choice(schedule._data.get_rooms()).get_number()
-        if schedule._data.get_professors():
-            new_class['professor'] = rnd.choice(schedule._data.get_professors()).get_name()
+    def _crossover_schedule(self, schedule1, schedule2):
+        crossover_schedule = Schedule(schedule1._data, schedule1._panel).initialize()
+        for i in range(len(crossover_schedule.get_classes())):
+            if rnd.random() > 0.5:
+                crossover_schedule.get_classes()[i] = schedule1.get_classes()[i]
+            else:
+                crossover_schedule.get_classes()[i] = schedule2.get_classes()[i]
+        return crossover_schedule
 
-        # Replace the old class with the mutated class
-        index = classes.index(class_to_mutate)
-        classes[index] = new_class
+    def _mutate_schedule(self, mutate_schedule):
+        schedule = Schedule(mutate_schedule._data, mutate_schedule._panel).initialize()
+        mutate_schedule._classes = schedule.get_classes()
 
-        # Mark the fitness as changed
-        schedule._is_fitness_changed = True
-
-    @staticmethod
-    def _select_tournament_population(population):
-        schedules = population.get_schedules()
-        if len(schedules) < TOURNAMENT_SELECTION_SIZE:
-            raise ValueError(f"Not enough schedules for tournament selection. Population needs at least {TOURNAMENT_SELECTION_SIZE} schedules.")
-        tournament_pop = Population(0, schedules[0]._data)
-        for i in range(TOURNAMENT_SELECTION_SIZE):
-            tournament_pop.get_schedules().append(schedules[rnd.randrange(0, len(schedules))])
+    def _select_tournament_population(self, pop):
+        tournament_pop = Population(0, pop.get_schedules()[0]._data)
+        for _ in range(TOURNAMENT_SELECTION_SIZE):
+            tournament_pop.get_schedules().append(pop.get_schedules()[rnd.randrange(0, len(pop.get_schedules()))])
         tournament_pop.get_schedules().sort(key=lambda x: x.get_fitness(), reverse=True)
         return tournament_pop
 
-
-# PrettyTableDisplay Class
 class PrettyTableDisplay:
     def print_schedule_as_table(self, schedule):
-        table = prettytable.PrettyTable(['Panel', 'Department', 'Course', 'Room', 'Professor', 'Class Time'])
+        table = prettytable.PrettyTable(['Panel', 'Batch', 'Department', 'Course', 'Room', 'Professor', 'Class Time'])
         for cls in schedule.get_classes():
-            table.add_row([cls["panel"], cls["department"], cls["course"], cls["room"], cls["professor"], cls["class_time"]])
+            table.add_row([
+                cls["panel"],
+                cls["batch"],
+                cls["department"],
+                cls["course"],
+                cls["room"],
+                cls["professor"],
+                cls["class_time"]
+            ])
         st.text(table)
 
-# Streamlit UI
 def main():
     st.title('University Timetable Scheduling')
     st.header('Input Data')
@@ -374,64 +338,68 @@ def main():
     data = Data()
 
     # Input for Rooms
-    room_count = st.number_input('Number of Rooms:', min_value=1, max_value=10, value=3, key='room_count')
+    room_count = st.number_input('Number of Rooms:', min_value=1, max_value=20, value=5, key='room_count')
     for i in range(room_count):
         room_number = st.text_input(f'Room {i + 1} Number:', key=f'room_number_{i}')
         data.add_room(Room(room_number))
 
     # Input for Lab Rooms
-    lab_room_count = st.number_input('Number of Lab Rooms:', min_value=1, max_value=5, value=1, key='lab_room_count')
+    lab_room_count = st.number_input('Number of Lab Rooms:', min_value=1, max_value=20, value=5, key='lab_room_count')
     for i in range(lab_room_count):
         lab_room_number = st.text_input(f'Lab Room {i + 1} Number:', key=f'lab_room_number_{i}')
         data.add_lab_room(Room(lab_room_number))
 
-    # Input for Meeting Times
-    st.subheader("Meeting Times")
+    # Generate Meeting Times
     data.generate_class_times()
 
-    # Input for professors
-    professor_count = st.number_input('Number of Professors:', min_value=1, max_value=10, value=5, key='professor_count')
+    # Input for Professors
+    professor_count = st.number_input('Number of Professors:', min_value=1, max_value=50, value=10, key='professor_count')
     for i in range(professor_count):
-        professor_name = st.text_input(f'professor {i + 1} Name:', key=f'professor_name_{i}')
-        data.add_professor(professor(f'I{i + 1}', professor_name))
+        professor_name = st.text_input(f'Professor {i + 1} Name:', key=f'professor_name_{i}')
+        data.add_professor(Professor(f'I{i + 1}', professor_name))
 
-    # Input for Courses and Departments
-    st.subheader("Departments and Courses")
-    dept_count = st.number_input('Number of Departments:', min_value=1, max_value=5, value=2, key='dept_count')
+    # Input for Departments and Courses
+    dept_count = st.number_input('Number of Departments:', min_value=1, max_value=10, value=2, key='dept_count')
     for i in range(dept_count):
         dept_name = st.text_input(f'Department {i + 1} Name:', key=f'dept_name_{i}')
-        course_count = st.number_input(f'Number of Courses in {dept_name}:', min_value=1, max_value=10, value=3, key=f'course_count_{i}')
+        course_count = st.number_input(f'Number of Courses in {dept_name}:', min_value=1, max_value=20, value=3, key=f'course_count_{i}')
         courses = []
         for j in range(course_count):
-            course_name = st.text_input(f'Course {j + 1} Name:', key=f'course_name_{i}_{j}')
-            course_lectures = st.number_input(f'Number of Lectures per Week for {course_name}:', min_value=1, max_value=5, value=3, key=f'course_lectures_{i}_{j}')
-            course_labs = st.number_input(f'Number of Labs per Week for {course_name}:', min_value=0, max_value=3, value=1, key=f'course_labs_{i}_{j}')
-            professor_indices = st.multiselect(f'Assign Professors for {course_name}:', 
-                     options=[prof.get_name() for prof in data.get_professors()], 
-                     key=f'course_professors_{i}_{j}')
-            selected_professors = [prof for prof in data.get_professors() if prof.get_name() in professor_indices]
-            courses.append(Course(f'C{j + 1}', course_name, selected_professors, course_lectures, course_labs))
+            course_name = st.text_input(f'Course {j + 1} Name in {dept_name}:', key=f'course_name_{i}_{j}')
+            course_lectures = st.number_input(f'Number of Lectures per Week for {course_name}:', min_value=1, max_value=10, value=3, key=f'course_lectures_{i}_{j}')
+            course_labs = st.number_input(f'Number of Labs per Week for {course_name}:', min_value=0, max_value=5, value=1, key=f'course_labs_{i}_{j}')
+            professor_options = [prof.get_name() for prof in data.get_professors()]
+            selected_professors = st.multiselect(f'Professors for {course_name}:', professor_options, key=f'professors_{i}_{j}')
+            professors = [prof for prof in data.get_professors() if prof.get_name() in selected_professors]
+            courses.append(Course(f'C{j + 1}', course_name, professors, course_lectures, course_labs))
         data.add_dept(Department(dept_name, courses))
 
-
-    st.subheader("Panels")
-    panel_count = st.number_input('Number of Panels:', min_value=1, max_value=5, value=2, key='panel_count')
+    # Input for Panels
+    panel_count = st.number_input('Number of Panels:', min_value=1, max_value=15, value=2, key='panel_count')
     for i in range(panel_count):
         panel_name = st.text_input(f'Panel {i + 1} Name:', key=f'panel_name_{i}')
-        data.add_panel(Panel(panel_name))
+        num_batches = st.number_input(f'Number of Batches in {panel_name}:', min_value=1, max_value=10, value=2, key=f'num_batches_{i}')
+        data.add_panel(Panel(panel_name, num_batches))
 
     if st.button('Generate Timetable'):
         population = Population(POPULATION_SIZE, data)
         genetic_algorithm = GeneticAlgorithm()
-        evolved_population = genetic_algorithm.evolve(population)
+        for generation in range(GENERATIONS):
+            population = genetic_algorithm.evolve(population)
+            best_schedule = max(population.get_schedules(), key=lambda s: s.get_fitness())
+            if best_schedule.get_fitness() == 1.0:
+                break
 
-
-        sorted_schedules = sorted(evolved_population.get_schedules(), key=lambda x: x.get_fitness(), reverse=True)
-        best_schedule = sorted_schedules[0]
-
-        st.header(f"{panel_name}")
-        display = PrettyTableDisplay()
-        display.print_schedule_as_table(best_schedule)
+        st.header("Generated Timetable")
+        for panel in data.get_panels():
+            st.subheader(f"Panel: {panel.get_name()}")
+            panel_schedules = [s for s in population.get_schedules() if s._panel == panel]
+            if panel_schedules:
+                best_panel_schedule = max(panel_schedules, key=lambda s: s.get_fitness())
+                display = PrettyTableDisplay()
+                display.print_schedule_as_table(best_panel_schedule)
+            else:
+                st.write(f"No schedule generated for panel {panel.get_name()}.")
 
 if __name__ == '__main__':
     main()
